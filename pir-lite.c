@@ -9,16 +9,16 @@
 #include <util/delay.h>
 
 register int8_t  pwm_step asm("r2"); // brightening, dimming, or steady
-register int8_t  butn_debounce asm("r3");
-register int16_t cnt_jiffies asm("r4"); // time remaining before off (in jiffies, 250ms)
+register uint8_t  butn_debounce asm("r3");
+register uint16_t cnt_jiffies asm("r4"); // time remaining before off (in jiffies, 250ms)
 
-#define HZ		4
+#define HZ		16
 
 #define ON_SECS		300
 #define UP_SECS_FAST	1
 #define UP_SECS_SLOW	4
-#define OFF_SECS_SLOW	64
-#define OFF_SECS_FAST	16
+#define OFF_SECS_SLOW	16
+#define OFF_SECS_FAST	4
 
 #define SECSTOSTEP(secs) (256/(secs * HZ));
 
@@ -32,41 +32,45 @@ register int16_t cnt_jiffies asm("r4"); // time remaining before off (in jiffies
  * TICK - timer tick from internal timer 1 (clk/16384) = 8MHz/16k + TOP=122 => 4.0023 Hz
  */
 
-#define LED_OCR		OCR0A
-#define LED_OVF_VECT 	TIM0_OVF_vect
-#define LED_COM_MODE	_BV(COM0A1)
-#define LED_WGM		_BV(WGM00)
-#define LED_CLK_MODE	_BV(CS02)
-#define LED_DDR		DDRB
-#define LED_PORT	PORTB
-#define LED_BIT		PB0
+#define LED_OCR			OCR0A
+#define LED_OVF_VECT		TIM0_OVF_vect
+#define LED_COM_MODE		_BV(COM0A1)
+#define LED_WGM			_BV(WGM00)
+#define LED_CLK_MODE		_BV(CS01)
+#define LED_DDR			DDRB
+#define LED_PORT		PORTB
+#define LED_BIT			PB0
+#define LED_TOP			255
 
-#define TICK_OCR	OCR1C
-#define TICK_TOP	122
-#define TICK_CLK_MODE   _BV(CS13)|_BV(CS12)|_BV(CS11)|_BV(CS10)
-#define TICK_OVF_VECT	TIM1_OVF_vect
+#define TICK_OCR		OCR1C
+#define TICK_TOP		122
+#define TICK_CLK_DIV_1024	(_BV(CS13)|_BV(CS11)|_BV(CS10))
+#define TICK_CLK_DIV_4096	(_BV(CS13)|_BV(CS12)|_BV(CS10))
+#define TICK_CLK_DIV_16384	(_BV(CS13)|_BV(CS12)|_BV(CS11)|_BV(CS10))
+#define TICK_CLK_MODE		TICK_CLK_DIV_4096
+#define TICK_OVF_VECT		TIM1_OVF_vect
 
 // sensor uses PB2/INT0 edge triggered interrupt
-#define SENS_DDR	DDRB
-#define SENS_PORT	PORTB
-#define SENS_PIN	PINB
-#define SENS_BV		_BV(PB2)
-#define SENS_VECT	INT0_vect
-#define SENS_IEF	INT0
+#define SENS_DDR		DDRB
+#define SENS_PORT		PORTB
+#define SENS_PIN		PINB
+#define SENS_BV			_BV(PB2)
+#define SENS_VECT		INT0_vect
+#define SENS_IEF		INT0
 
 // button uses PB1 pin-change interrupt
-#define BUTN_DDR	DDRB
-#define BUTN_PORT	PORTB
-#define BUTN_PIN	PINB
-#define BUTN_BV		_BV(PB1)
-#define BUTN_VECT	PCINT0_vect
-#define BUTN_IEF	PCIE
+#define BUTN_DDR		DDRB
+#define BUTN_PORT		PORTB
+#define BUTN_PIN		PINB
+#define BUTN_BV			_BV(PB1)
+#define BUTN_VECT		PCINT0_vect
+#define BUTN_IEF		PCIE
 
 // pins PB5 and PB4 are spare.   We could use pb4 for a bit-bang diagnostic UART if requried.
-#define HELLO_BV	_BV(PB5)
-#define HELLO_DDR	DDRB
-#define HELLO_PORT	PORTB
-#define HELLO_PIN	PINB
+#define HELLO_BV		_BV(PB3)
+#define HELLO_DDR		DDRB
+#define HELLO_PORT		PORTB
+#define HELLO_PIN		PINB
 
 #else
 #error unsupported chip
@@ -77,10 +81,11 @@ register int16_t cnt_jiffies asm("r4"); // time remaining before off (in jiffies
  */
 ISR(TICK_OVF_VECT)	
 {
+	int16_t pwm;
 	/* 
 	 * If the LED is on, reduce the on-time by one jiffy
 	 */
-	if (cnt_jiffies) {
+	if (cnt_jiffies != 0) {
 		--cnt_jiffies;
 		if (cnt_jiffies == 0) {
 			// switch to dimming mode (slow one minute dim)
@@ -90,44 +95,53 @@ ISR(TICK_OVF_VECT)
 		}
 	}
 
-	if (butn_debounce) {
+	if (butn_debounce > 0) {
 		--butn_debounce;
 		if (butn_debounce == 0) {
 			// re-enable the button interrupt
-			GIMSK &= ~_BV(BUTN_IEF);
+			GIMSK |= _BV(BUTN_IEF);
+			GIMSK |= _BV(SENS_IEF);
 		}
 	}
+
+	/* 
+	 * If led is stable, bail
+	 */
+	if (pwm_step == 0)
+		return;
 	
 	/* 
-	 * If we are brightening, bump the brightness by the step factor
+	 * Alter the brightness brightness by the step factor
+	 *
+	 * If we are brightening, check for MAX
+	 * If we are dimming, check for ZERO
 	 */
+	pwm = LED_OCR + pwm_step;
 	if (pwm_step > 0) {
-		int16_t pwm = LED_OCR;
-		pwm += pwm_step;
-		if (pwm >= 255)
+		if (pwm >= LED_TOP)
 		{
 			// we hit max brightness, stablize and start the off-timer
-			pwm = 255;
+			pwm = LED_TOP;
 			pwm_step = 0;
 			// set a timer until turn-off time
 			cnt_jiffies = ON_SECS*HZ;
 		}
-		LED_OCR=pwm;
 	}
-	else if (pwm_step < 0) {
-		int16_t pwm = LED_OCR;
-		pwm -= pwm_step;
+	else /* if (pwm_step < 0)*/ {
+		/* 
+		 * We are dimming, reduce the brightness
+		 */
 		if (pwm <= 0)
 		{
 			// we hit OFF state, go idle
 			pwm = 0;
 			pwm_step = 0;
+			// reenable sensor interrupt 
+			GIMSK |= _BV(SENS_IEF);
 		}
-		LED_OCR = pwm;
 	}
+	LED_OCR = pwm;
 
-	// flip the hello world LED
-	HELLO_PIN |= HELLO_BV;
 }
 
 /* 
@@ -136,11 +150,12 @@ ISR(TICK_OVF_VECT)
  */
 ISR(SENS_VECT)
 {
-	if (!LED_OCR) {
+	if (LED_OCR == 0) {
 		pwm_step = SECSTOSTEP(UP_SECS_SLOW);
 		if (pwm_step < 1)
 			pwm_step = 1;
 	}
+	GIMSK |= _BV(SENS_IEF);
 }
 
 /* 
@@ -152,29 +167,48 @@ ISR(BUTN_VECT)
 	/* 
 	 * Ignore spurious interrupts during debounce period
 	 */
-	if (butn_debounce)
+	if (butn_debounce != 0)
 		return;
 
 	/* 
 	 * Disable interrupt, set timer to re-enable in 1 second
 	 */
 	GIMSK &= _BV(BUTN_IEF);
-	butn_debounce = 4; 
+	butn_debounce = 1+HZ/4;  // about a quarter second debounce
 	
 	/* 
-	 * If LED is off, fade it up fast
-	 * If LED is on, fade it out relatively quickly
+	 * If LED is fading on/off stop at current brightness
+	 * If LED is full off, fade it up fast
+	 * If LED is full on, fade it out relatively slowly
+	 * If LED is half on, fade it out relatively quickly
 	 */
-	if (!LED_OCR) {
+
+	if (pwm_step != 0) {
+		/* 
+		 * Pause fade at current brightness
+		 */
+		pwm_step = 0;
+		return;
+	}
+	
+	if (LED_OCR == 0) {
+		/* 
+		 * Turn LED on
+		 */
 		pwm_step = SECSTOSTEP(UP_SECS_FAST); // 1s fade up
 		if (pwm_step == 0) 
 			pwm_step = 1;
 	}
 	else {
-		pwm_step = 0-SECSTOSTEP(OFF_SECS_FAST); // 16s fade down
+		/* 
+		 * Turn led off quick (manual off, or resume a paused fade-out)
+		 */
+		pwm_step = 0-SECSTOSTEP(OFF_SECS_FAST); // 4s fade down
 		if (pwm_step == 0)
 			pwm_step = -1;
+		cnt_jiffies = 0; // disable off-timer
 	}
+	
 }
 
 /* 
@@ -191,8 +225,11 @@ ioinit (void)			/* Note [6] */
 	 */
 	HELLO_DDR |= HELLO_BV;
 	HELLO_PORT |= HELLO_BV; 
-	for (i=0;i<100;i++) delay_ms(10);
+	for (i=0;i<100;i++) _delay_ms(10);
+	HELLO_PORT &= ~(HELLO_BV); 
+
 #endif
+	LED_OCR=0x80;
 
 	/* 
 	 * Set up the timer 0 OC pin as as PWM output
@@ -236,8 +273,9 @@ ioinit (void)			/* Note [6] */
 	 *
 	 * Simple pushbutton with internal pullup and some software debouncing
 	 */
-	BUTN_PORT |= BUTN_BV; // enable pullup
-	PCMSK |= BUTN_BV;
+	BUTN_DDR &= ~BUTN_BV;   // input
+	BUTN_PORT |= BUTN_BV;   // enable pullup
+	PCMSK |= BUTN_BV;	// pin change interrupt on PB1
 	GIMSK |= _BV(BUTN_IEF);
 
 	sei ();
@@ -246,11 +284,14 @@ ioinit (void)			/* Note [6] */
 int
 main (void)
 {
-	ioinit ();
 	// led off initially
 	pwm_step = 0;
 	cnt_jiffies = 0;
-	butn_debounce = 0;
+	butn_debounce = HZ; // ignore button interrupt during power on
+	
+
+	ioinit ();
+	butn_debounce = 0; // allow button input
 	
 	/* loop forever, the interrupts are doing the rest */
 	for (;;)
