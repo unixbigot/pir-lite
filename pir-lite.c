@@ -171,10 +171,10 @@ ISR(BUTN_VECT)
 		return;
 
 	/* 
-	 * Disable interrupt, set timer to re-enable in 1 second
+	 * Disable interrupt, set timer to re-enable in ~250ms
 	 */
 	GIMSK &= _BV(BUTN_IEF);
-	butn_debounce = 1+HZ/4;  // about a quarter second debounce
+	butn_debounce = 1+HZ/4;  // at least a quarter second debounce
 	
 	/* 
 	 * If LED is fading on/off stop at current brightness
@@ -203,7 +203,7 @@ ISR(BUTN_VECT)
 		/* 
 		 * Turn led off quick (manual off, or resume a paused fade-out)
 		 */
-		pwm_step = 0-SECSTOSTEP(OFF_SECS_FAST); // 4s fade down
+		pwm_step = 0-SECSTOSTEP(OFF_SECS_FAST); // slow fade (about 4s from full to off)
 		if (pwm_step == 0)
 			pwm_step = -1;
 		cnt_jiffies = 0; // disable off-timer
