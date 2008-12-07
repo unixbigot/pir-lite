@@ -41,6 +41,7 @@ register uint16_t cnt_jiffies asm("r4"); // time remaining before off (in jiffie
 #define LED_PORT		PORTB
 #define LED_BIT			PB0
 #define LED_TOP			255
+#define LED_BOT			3
 
 #define TICK_OCR		OCR1C
 #define TICK_TOP		122
@@ -113,8 +114,8 @@ ISR(TICK_OVF_VECT)
 	/* 
 	 * Alter the brightness brightness by the step factor
 	 *
-	 * If we are brightening, check for MAX
-	 * If we are dimming, check for ZERO
+	 * If we are brightening, check for LED_TOP
+	 * If we are dimming, check for LED_BOT
 	 */
 	pwm = LED_OCR + pwm_step;
 	if (pwm_step > 0) {
@@ -131,17 +132,16 @@ ISR(TICK_OVF_VECT)
 		/* 
 		 * We are dimming, reduce the brightness
 		 */
-		if (pwm <= 0)
+		if (pwm <= LED_BOT)
 		{
-			// we hit OFF state, go idle
-			pwm = 0;
+			// we hit min brightness, go idle
+			pwm = LED_BOT;
 			pwm_step = 0;
 			// reenable sensor interrupt 
 			GIMSK |= _BV(SENS_IEF);
 		}
 	}
 	LED_OCR = pwm;
-
 }
 
 /* 
@@ -150,7 +150,7 @@ ISR(TICK_OVF_VECT)
  */
 ISR(SENS_VECT)
 {
-	if (LED_OCR == 0) {
+	if (LED_OCR <= LED_BOT) {
 		pwm_step = SECSTOSTEP(UP_SECS_SLOW);
 		if (pwm_step < 1)
 			pwm_step = 1;
@@ -191,7 +191,7 @@ ISR(BUTN_VECT)
 		return;
 	}
 	
-	if (LED_OCR == 0) {
+	if (LED_OCR <= LED_BOT) {
 		/* 
 		 * Turn LED on
 		 */
