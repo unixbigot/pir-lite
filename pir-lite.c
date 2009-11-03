@@ -41,7 +41,7 @@ register uint16_t cnt_jiffies asm("r4"); // time remaining before off (in jiffie
 #define LED_PORT		PORTB
 #define LED_BIT			PB0
 #define LED_TOP			255
-#define LED_BOT			3
+#define LED_BOT			1
 
 #define TICK_OCR		OCR1C
 #define TICK_TOP		122
