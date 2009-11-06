@@ -1,0 +1,8 @@
+This project is a simple presence-sensing light switch that
+uses a Passive Infra-Red (PIR) sensor module and/or a pushbutton
+to provide a dimmable LED light controller.
+
+A description of the project motication and goals is in pir-lite.md.  
+(Do 'make doc' to get a HTML version)
+
+I wrote about this project on my blog at http://blog.unixbigot.id.au/2009/11/simple-presence-sensing-led-lighting.html
