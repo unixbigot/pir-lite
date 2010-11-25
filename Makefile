@@ -1,4 +1,4 @@
-MCU = attiny45
+MCU = atmega8515
 F_CPU = 8000000
 
 TARGET = pir-lite

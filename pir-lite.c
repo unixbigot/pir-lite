@@ -45,10 +45,11 @@ register uint16_t cnt_jiffies asm("r4"); // time remaining before off (in jiffie
 
 #define TICK_OCR		OCR1C
 #define TICK_TOP		122
+#define TICK_CLK_MODE		_BV(PWM1A)
 #define TICK_CLK_DIV_1024	(_BV(CS13)|_BV(CS11)|_BV(CS10))
 #define TICK_CLK_DIV_4096	(_BV(CS13)|_BV(CS12)|_BV(CS10))
 #define TICK_CLK_DIV_16384	(_BV(CS13)|_BV(CS12)|_BV(CS11)|_BV(CS10))
-#define TICK_CLK_MODE		TICK_CLK_DIV_4096
+#define TICK_CLK_DIV		TICK_CLK_DIV_4096
 #define TICK_OVF_VECT		TIM1_OVF_vect
 
 // sensor uses PB2/INT0 edge triggered interrupt
@@ -58,6 +59,7 @@ register uint16_t cnt_jiffies asm("r4"); // time remaining before off (in jiffie
 #define SENS_BV			_BV(PB2)
 #define SENS_VECT		INT0_vect
 #define SENS_IEF		INT0
+#define SENS_MSK		GIMSK
 
 // button uses PB1 pin-change interrupt
 #define BUTN_DDR		DDRB
@@ -66,9 +68,65 @@ register uint16_t cnt_jiffies asm("r4"); // time remaining before off (in jiffie
 #define BUTN_BV			_BV(PB1)
 #define BUTN_VECT		PCINT0_vect
 #define BUTN_IEF		PCIE
+#define BUTN_MSK		PCMSK
 
 // pins PB5 and PB4 are spare.   We could use pb4 for a bit-bang diagnostic UART if requried.
 #define HELLO_BV		_BV(PB3)
+#define HELLO_DDR		DDRB
+#define HELLO_PORT		PORTB
+#define HELLO_PIN		PINB
+
+
+#elif defined(__AVR_ATmega8515__) 
+/* 
+ * Pin assignments for ATmega8515 (STK 200)
+ *
+ * Note: this is NOT TESTED as I no longer have access to an STK200
+ */
+
+// LED uses PB0/OC0 (pin 1)
+#define LED_OCR			OCR0
+#define LED_OVF_VECT		TIM0_OVF_vect
+#define LED_COM_MODE		_BV(COM0A1)
+#define LED_WGM			_BV(WGM00)
+#define LED_CLK_MODE		_BV(CS01)
+#define LED_DDR			DDRB
+#define LED_PORT		PORTB
+#define LED_BIT			PB0
+#define LED_TOP			255
+#define LED_BOT			1
+
+// Clock timer uses (16 bit) timer 1 
+#define TICK_OCR		OCR1AL
+#define TICK_TOP		122
+#define TICK_OCRH		OCR1AH
+#define TICK_TOPH		0
+#define TICK_CLK_MODE		_BV(PWM1A)
+#define TICK_CLK_DIV_1024	(_BV(CS13)|_BV(CS11)|_BV(CS10))
+#define TICK_CLK_DIV_4096	(_BV(CS13)|_BV(CS12)|_BV(CS10))
+#define TICK_CLK_DIV_16384	(_BV(CS13)|_BV(CS12)|_BV(CS11)|_BV(CS10))
+#define TICK_CLK_DIV		TICK_CLK_DIV_4096
+#define TICK_OVF_VECT		TIM1_OVF_vect
+
+// sensor uses PD2/INT0 edge triggered interrupt (pin 12)
+#define SENS_DDR		DDRD
+#define SENS_PORT		PORTD
+#define SENS_PIN		PIND
+#define SENS_BV			_BV(PD2)
+#define SENS_VECT		INT0_vect
+#define SENS_IEF		INT0
+#define SENS_MASK		GICR
+
+// button uses PD3/INT1 pin-change interrupt (pin 13)
+#define BUTN_DDR		DDRD
+#define BUTN_PORT		PORTD
+#define BUTN_PIN		PIND
+#define BUTN_VECT		INT1_vect
+#define BUTN_IEF		INT1
+#define BUTN_MASK		GICR
+
+// test LED on Pin 2 (PB1)
+#define HELLO_BV		_BV(PB1)
 #define HELLO_DDR		DDRB
 #define HELLO_PORT		PORTB
 #define HELLO_PIN		PINB
@@ -100,8 +158,8 @@ ISR(TICK_OVF_VECT)
 		--butn_debounce;
 		if (butn_debounce == 0) {
 			// re-enable the button interrupt
-			GIMSK |= _BV(BUTN_IEF);
-			GIMSK |= _BV(SENS_IEF);
+			BUTN_MSK |= _BV(BUTN_IEF);
+			SENS_MSK |= _BV(SENS_IEF);
 		}
 	}
 
@@ -138,7 +196,7 @@ ISR(TICK_OVF_VECT)
 			pwm = LED_BOT;
 			pwm_step = 0;
 			// reenable sensor interrupt 
-			GIMSK |= _BV(SENS_IEF);
+			SENS_MSK |= _BV(SENS_IEF);
 		}
 	}
 	LED_OCR = pwm;
@@ -155,7 +213,7 @@ ISR(SENS_VECT)
 		if (pwm_step < 1)
 			pwm_step = 1;
 	}
-	GIMSK |= _BV(SENS_IEF);
+	SENS_MSK |= _BV(SENS_IEF);
 }
 
 /* 
@@ -173,7 +231,7 @@ ISR(BUTN_VECT)
 	/* 
 	 * Disable interrupt, set timer to re-enable in ~250ms
 	 */
-	GIMSK &= _BV(BUTN_IEF);
+	BUTN_MSK &= _BV(BUTN_IEF);
 	butn_debounce = 1+HZ/4;  // at least a quarter second debounce
 	
 	/* 
@@ -236,8 +294,12 @@ ioinit (void)			/* Note [6] */
 	 *
 	 * Configure timer 0 to Intialize to mode 1 (phase correct PWM), non-inverted, timer stopped
 	 */
+#ifdef TCCR0
+	TCCR0A = LED_COM_MODE|LED_WGM;
+#else
 	TCCR0A = LED_COM_MODE|LED_WGM;
 	TCCR0B = 0;
+#endif
 	
 	/* Set initial PWM value to 0. */
 	LED_OCR = 0;
@@ -250,14 +312,26 @@ ioinit (void)			/* Note [6] */
 	 *
 	 * Set clock source to IOclk/64
 	 */
+#ifdef TCCR0
+	TCCR0 |= LED_CLK_MODE;
+#else
 	TCCR0B |= LED_CLK_MODE;
+#endif
 
 	/* 
 	 * Set up timer 1 as clock tick source
 	 */
-	TCCR1 |= _BV(PWM1A); // clear timer on OCR1C match, generate overflow interrupt
-	TCCR1 |= TICK_CLK_MODE; // prescaler divider 16384
+#ifdef TCCR1
+	TCCR1 |= TICK_CLK_MODE ; // clear timer on OCR1C match, generate overflow interrupt
+	TCCR1 |= TICK_CLK_DIV; // prescaler divider 16384
+#else
+	TCCR1A |= TICK_CLK_MODE); // clear timer on OCR1C match, generate overflow interrupt
+	TCCR1B |= TICK_CLK_DIV; // prescaler divider 16384
+#endif
 	TICK_OCR = TICK_TOP;
+#ifdef TICK_OCRH
+	TICK_OCRH = TICK_TOPH;
+#endif
 	TIMSK |= _BV(TOIE1); // overflow interrupt enable 
  
 	/* 
@@ -266,7 +340,7 @@ ioinit (void)			/* Note [6] */
 	 * Sensor is active logic, HIGH level when triggered
 	 */
 	MCUCR |= _BV(ISC01)|_BV(ISC00); // interrupt on rising edge
-	GIMSK |= _BV(SENS_IEF);		// INT0 enable
+	SENS_MSK |= _BV(SENS_IEF);		// INT0 enable
 	
 	/* 
 	 * Set up button input
@@ -275,8 +349,10 @@ ioinit (void)			/* Note [6] */
 	 */
 	BUTN_DDR &= ~BUTN_BV;   // input
 	BUTN_PORT |= BUTN_BV;   // enable pullup
+#if defined(PCMSK) &&  (BUTN_MSK == PCMSK)
 	PCMSK |= BUTN_BV;	// pin change interrupt on PB1
-	GIMSK |= _BV(BUTN_IEF);
+#endif
+	BUTN_MSK |= _BV(BUTN_IEF);
 
 	sei ();
 }
